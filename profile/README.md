@@ -1,330 +1,213 @@
 # StableLink
 
-## 1. Project Overview
+**Etherlink-native stablecoin payment infrastructure for Asia-based freelancers and agencies.**
 
-StableLink is an Etherlink-native stablecoin payment infrastructure platform designed for Asia-based freelancers and small agencies.
-
-It enables users to:
-- Create programmable stablecoin invoices
-- Accept payments in USDC
-- Automatically split funds (platform fee + recipients)
-- Withdraw funds non-custodially
-- Manage organizations and team roles
-- Integrate via REST APIs and webhooks
-
-StableLink is NOT a wallet.
-StableLink is NOT custodial.
-StableLink is financial infrastructure built on Etherlink.
+StableLink is a non-custodial platform that lets freelancers and small teams create programmable stablecoin invoices, accept USDC payments, split funds automatically (e.g. platform fee + team), and withdraw to their own wallets—all on [Etherlink](https://etherlink.com). We are building long-term financial infrastructure, not a custodial wallet or a short-term prototype.
 
 ---
 
-## 2. Vision & Alignment
+## The Problem We Solve
 
-## Core Alignment
+Cross-border payments for freelancers and agencies in Asia are:
 
-- Built natively on Etherlink (EVM compatible)
-- Focused on stablecoin payments (USDC primary)
-- Asia-first freelancer & agency use case
-- Non-custodial architecture
-- Infrastructure-grade thinking
+| Pain | Impact |
+|------|--------|
+| **Slow** | 3–7 day settlement; cash flow and planning suffer. |
+| **Expensive** | FX spreads, remittance fees, and intermediary costs eat into earnings. |
+| **Opaque** | Hard to know when money arrives, who got paid, and at what rate. |
+| **Custodial** | Funds often sit in platforms; users don’t hold their own money. |
 
-## Problem Being Solved
+StableLink addresses this by:
 
-Cross-border payments for freelancers are:
-- Slow (3–7 day settlement)
-- Expensive (FX + remittance fees)
-- Opaque
-- Custodial
-
-StableLink solves this by:
-- Enabling direct on-chain stablecoin invoices
-- Providing instant settlement
-- Maintaining wallet custody
-- Enabling programmable splits
+- **On-chain stablecoin invoices** — Create invoices denominated in USDC; payment is a single on-chain transaction.
+- **Instant settlement** — Payments settle in seconds on Etherlink; no multi-day banking delays.
+- **User keeps custody** — We never hold user funds; payers send to the contract, recipients withdraw to their own wallets.
+- **Programmable splits** — Define recipients and percentages (e.g. freelancer 97%, platform 3%); the smart contract enforces splits automatically.
 
 ---
 
-## 3. High-Level Architecture
+## Business Use Cases
 
+1. **Freelancers**  
+   Issue invoices in USDC, share a payment link, get paid on Etherlink. No middleman custody; withdraw to your wallet when you want.
+
+2. **Agencies & teams**  
+   One invoice, multiple recipients: e.g. 70% to delivery, 20% to ops, 10% to platform. Splits are fixed at creation and executed on payment.
+
+3. **Marketplaces & platforms**  
+   Use StableLink as infrastructure: create invoices via API, send links to buyers; settlement and splits happen on-chain. Integrate with REST APIs and webhooks.
+
+4. **Cross-border B2B**  
+   Asia-based teams working with global clients: invoice in USDC, avoid FX and slow wires; clients pay once, funds split and withdraw non-custodially.
+
+---
+
+## What We Build (Product)
+
+- **Dashboard** — Create and manage invoices, view payments, withdraw balances (Etherlink).
+- **Checkout** — Shareable payment links; payers connect wallet, pay in USDC, see confirmation on-chain.
+- **Programmable splits** — At invoice creation, define recipients and percentages (basis points); contract allocates on payment.
+- **Non-custodial withdrawals** — Withdraw earned USDC to your wallet anytime; no platform custody.
+- **API & webhooks** — Create invoices and listen for events (e.g. paid) for integrations.
+- **Organizations & roles** — Team structure, roles, and org-level settings (backend).
+
+**Tech summary:** React (Vite) frontend, Node.js (Express) backend, Prisma + DB for metadata, Solidity smart contract on Etherlink. Money lives on-chain; metadata and product logic off-chain.
+
+---
+
+## Architecture
+
+High-level: **money on-chain, metadata off-chain**. The backend never touches user funds.
+
+```mermaid
+flowchart TB
+    subgraph Users
+        Creator[Creator / Freelancer]
+        Payer[Payer / Client]
+    end
+
+    subgraph Frontend["Web App (React + Vite)"]
+        Dashboard[Dashboard]
+        Checkout[Checkout Page]
+        API_UI[API Portal]
+    end
+
+    subgraph Backend["Backend (Node.js + Express)"]
+        API[REST API]
+        Indexer[Event Indexer]
+        DB[(Prisma / DB)]
+    end
+
+    subgraph Chain["Etherlink"]
+        Contract[InvoicePayments.sol]
+        USDC[USDC]
+    end
+
+    Creator --> Dashboard
+    Creator --> API_UI
+    Payer --> Checkout
+    Dashboard --> API
+    Checkout --> Contract
+    Checkout --> API
+    API_UI --> API
+    API --> DB
+    Indexer --> Contract
+    Indexer --> DB
+    Contract --> USDC
 ```
-Frontend (Next.js)
-        |
-Backend (Node.js + Express)
-        |
-Database (PostgreSQL or SQLite)
-        |
-Smart Contracts (Solidity)
-        |
-Etherlink Blockchain
-```
 
-- Money lives on-chain.
-- Metadata lives off-chain.
-- Backend never touches user funds.
+**Data flow:**
+
+- **Invoices:** Creator creates invoice (optional: via API). Frontend calls contract `createInvoice(amount, token, splits)`; backend stores metadata and indexes `InvoiceCreated`.
+- **Payment:** Payer opens checkout link, connects wallet, calls `payInvoice(invoiceId)`. USDC moves payer → contract; contract updates balances per splits; backend indexes `InvoicePaid` and `FundsAllocated`.
+- **Withdraw:** Recipient withdraws from dashboard; frontend calls `withdraw(token, amount)`; contract sends USDC to recipient. Backend indexes `Withdrawal`.
 
 ---
 
-## 4. Smart Contract Design
+## Invoice & Payment Flow (Mermaid)
 
-### Contract Name
+End-to-end lifecycle from creation to withdrawal.
 
-`InvoicePayments.sol`
+```mermaid
+sequenceDiagram
+    participant C as Creator
+    participant F as Frontend
+    participant API as Backend API
+    participant SC as InvoicePayments (Contract)
+    participant P as Payer
+    participant R as Recipient
 
-### Token Support
+    Note over C,R: Create invoice
+    C->>F: Create invoice (amount, splits)
+    F->>SC: createInvoice(amount, token, splits)
+    SC-->>F: invoiceId
+    F->>API: POST /invoices (metadata + invoiceId)
+    API->>API: Store + index InvoiceCreated
 
-- USDC primary
-- ERC20-compatible token configurable
+    Note over C,R: Pay invoice
+    P->>F: Open checkout link
+    F->>API: GET public invoice
+    P->>SC: payInvoice(invoiceId)
+    SC->>SC: transferFrom(Payer), update balances
+    SC-->>F: InvoicePaid, FundsAllocated
+    API->>API: Index events, update status
 
-### Data Structures
-
-```solidity
-struct Split {
-    address recipient;
-    uint16 percentage; // basis points (10000 = 100%)
-}
-
-struct Invoice {
-    address creator;
-    address token;
-    uint256 amount;
-    bool paid;
-    bool withdrawn;
-}
-```
-
-**Storage**
-
-- `mapping(uint256 => Invoice) public invoices;`
-- `mapping(uint256 => Split[]) public invoiceSplits;`
-- `mapping(address => mapping(address => uint256)) public balances;` — balances[user][token] => withdrawable amount
-
-**Core Functions**
-
-- **createInvoice** — Parameters: amount, token, splits[]. Validations: amount > 0, splits total == 10000. Emits: InvoiceCreated
-- **payInvoice** — Parameters: invoiceId. Logic: TransferFrom payer → contract, mark invoice as paid, calculate split balances, update balances mapping. Emits: InvoicePaid
-- **withdraw** — Parameters: token, amount. Logic: Ensure sufficient balance, transfer token to caller, update balance. Emits: FundsWithdrawn
-
-**Design Principles**
-
-- No upgradeability for MVP
-- No custody logic
-- Minimal complexity
-- Clear event emission
-- Etherlink deployment only
-
----
-
-## 5. Backend Architecture (Node.js)
-
-### Stack
-
-- Node.js
-- Express
-- ethers.js
-- PostgreSQL (preferred) or SQLite
-- dotenv
-- CORS
-- JWT (future)
-
-### Responsibilities
-
-- Store invoice metadata
-- Index blockchain events
-- Power dashboard APIs
-- Manage organization & team logic
-- API key authentication
-- Webhook dispatch
-
-**Backend NEVER:** Holds funds, signs transactions, custodies tokens.
-
-### Database Schema
-
-**Users:** id, email, wallet_address, created_at
-
-**Organizations:** id, name, primary_wallet, default_platform_fee, created_at
-
-**OrganizationMembers:** id, organization_id, user_id, role (admin / finance / viewer), status
-
-**Invoices:** id (internal), onchain_invoice_id, organization_id, creator_wallet, client_name, client_email, token, amount, status (draft / paid / withdrawn), tx_hash, created_at, paid_at
-
-**APIKeys:** id, organization_id, live_key, test_key, created_at
-
-**Webhooks:** id, organization_id, url, subscribed_events, created_at
-
----
-
-## 6. REST API Design
-
-### Authentication
-
-- `Authorization: Bearer API_KEY`
-
-### Endpoints
-
-- POST /api/invoices
-- GET /api/invoices
-- GET /api/invoices/:id
-- POST /api/webhooks
-- GET /api/organization
-- POST /api/team/invite
-
-### Example Create Invoice Payload
-
-```json
-{
-  "amount": 1000,
-  "token": "USDC",
-  "client_name": "Acme Inc",
-  "splits": [
-    { "wallet": "0xabc...", "percentage": 9700 },
-    { "wallet": "0xdef...", "percentage": 300 }
-  ]
-}
+    Note over C,R: Withdraw
+    R->>F: Withdraw
+    F->>SC: withdraw(token, amount)
+    SC->>R: transfer USDC to recipient
+    SC-->>F: Withdrawal
+    API->>API: Index Withdrawal
 ```
 
 ---
 
-## 7. Webhooks
+## System Context (Components)
 
-**Events:**
+```mermaid
+flowchart LR
+    subgraph External
+        Wallet[User Wallets]
+    end
 
-- invoice.created
-- invoice.paid
-- withdrawal.completed
+    subgraph StableLink
+        Web[Web App]
+        Backend[Backend]
+        Contract[Smart Contract]
+    end
 
-Backend listens to smart contract events via ethers.js. Dispatches POST requests to registered webhook URLs.
+    subgraph Etherlink
+        Chain[Etherlink]
+    end
 
-**Optional:** HMAC signature verification
+    Wallet <--> Web
+    Web <--> Backend
+    Web <--> Contract
+    Backend <--> Contract
+    Contract <--> Chain
+```
 
----
-
-## 8. Frontend Architecture (Next.js)
-
-### Pages
-
-- Landing
-- Dashboard
-- Create Invoice
-- Public Invoice Payment
-- Withdraw
-- Invoices
-- Settings & Organization
-- API & Developer
-
-### Wallet Integration
-
-- MetaMask
-- Network check (Etherlink)
-- Auto-switch support
-- Address short display
-
-### UX Principles
-
-- Stripe-like clarity
-- Futuristic but professional
-- No crypto jargon
-- Strong transaction states
-- Clear success/failure feedback
+- **Web App:** Dashboard, checkout, API portal; wallet connect (Etherlink); reads contract state and calls contract write methods.
+- **Backend:** REST API, event indexer (InvoiceCreated, InvoicePaid, FundsAllocated, Withdrawal), metadata and org/team data. Does not custody funds or sign user transactions.
+- **Smart Contract:** `InvoicePayments.sol` — createInvoice, payInvoice, withdraw, cancelInvoice; holds funds only until allocation/withdrawal; uses SafeERC20 and ReentrancyGuard.
 
 ---
 
-## 9. Role-Based Access
+## Repository Structure
 
-**Roles:**
-
-- **Admin:** Full control, withdraw, manage members
-- **Finance:** Create invoices, view reports, no team management
-- **Viewer:** Read-only
-
-**Enforced in:** Backend middleware, UI visibility logic
+| Path | Description |
+|------|-------------|
+| `stablelink-frontend/` | React (Vite) app: landing, dashboard, checkout, withdraw, API portal. |
+| `backend/` | Node.js + Express: REST API, Prisma, Etherlink event indexer. |
+| `contracts/` | Foundry project: `InvoicePayments.sol` (Solidity ^0.8.20, OpenZeppelin). |
 
 ---
 
-## 10. Security Principles
+## Who It’s For
 
-- Non-custodial smart contract
-- No private key storage
-- Role-based backend access
-- API key rotation
-- Webhook verification (future)
-- No user passwords (wallet-first auth)
+- **Builders and teams in Asia** building or using Web3 payment tools.
+- **Freelancers and agencies** who want fast, low-fee, non-custodial stablecoin payments.
+- **Product-minded teams** with a working MVP and a path to scale (APIs, webhooks, integrations).
 
----
-
-## 11. Revenue Model
-
-**Platform Fee:**
-
-- Default 3%
-- Auto-applied in split
-- Configurable per organization
-
-Revenue is distributed via smart contract split logic.
+StableLink is **not** a wallet and **not** custodial—it is financial infrastructure built on Etherlink for real-world use.
 
 ---
 
-## 12. What Is NOT Included in MVP
+## Quick Start (Developers)
 
-- Fiat on/off ramp
-- KYC
-- Token swaps
-- Multi-chain deployment
-- Smart contract upgradeability
-- Audits
-- Mobile app
+- **Contract:** `cd contracts && forge build`. Deploy to Etherlink (e.g. Shadownet); set `ETHERLINK_RPC_URL` and deployer key.
+- **Backend:** `cd backend && npm i && cp .env.example .env` — set `ETHERLINK_RPC_URL`, `DATABASE_URL`, contract address; run `npm run db:push` and `npm run dev`.
+- **Frontend:** `cd stablelink-frontend && npm i && cp .env.example .env` — set contract address and chain; run `npm run dev`.
+
+See each repo’s `.env.example` for required variables. Do not commit `.env`.
 
 ---
 
-## 13. Grant Eligibility Positioning
+## Links
 
-StableLink demonstrates:
-
-- Real MVP functionality
-- Etherlink-native deployment
-- Financial infrastructure thinking
-- Role-based SaaS maturity
-- API programmability
-- Clear monetization model
-
-This is not a hackathon demo. This is early-stage financial infrastructure.
+- [Etherlink](https://etherlink.com) — EVM-compatible chain we build on.
+- [Etherlink Docs](https://docs.etherlink.com) — Network info, RPC, deployment.
 
 ---
 
-## 14. Development Order
-
-1. Smart Contract (deploy to Etherlink testnet)
-2. Backend event indexing
-3. Invoice creation flow
-4. Payment flow
-5. Withdrawal logic
-6. Organization & roles
-7. API system
-8. Webhooks
-9. Final polish & demo recording
-
----
-
-## 15. Demo Flow for Grant Review
-
-1. Connect wallet
-2. Create invoice
-3. Open payment link
-4. Pay invoice
-5. See split distribution
-6. Withdraw funds
-7. Show API page
-
-Duration: 3 minutes max.
-
----
-
-## 16. Core Philosophy
-
-StableLink is:
-
-- Non-custodial
-- Infrastructure-focused
-- Asia-first
-- Etherlink-native
-- Scalable beyond MVP
-- Built for long-term startup growth
+© 2026 StableLink. All rights reserved.
